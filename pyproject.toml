@@ -1,0 +1,17 @@
+[project]
+name = "diffusion-lab"
+version = "0.1.0"
+description = "Diffusionsmodelle von Grund auf: Mini-DDPM auf MNIST, danach SDXL-LoRA"
+requires-python = ">=3.12"
+dependencies = [
+    "matplotlib>=3.11.2",
+    "torch>=2.14.0",
+    "torchvision>=0.29.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["ddpm"]

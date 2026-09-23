@@ -1,0 +1,15 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Daten & Artefakte (nie committen)
+data/
+runs/
+*.pt
+*.pth
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
