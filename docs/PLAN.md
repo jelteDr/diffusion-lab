@@ -18,8 +18,8 @@ Legende: ✅ fertig · 🚧 in Arbeit · ⬜ offen
 | M0 | Grundgerüst | uv-Projekt (Python 3.12, torch/MPS), Paket `ddpm/`, Git + GitHub | Projektaufbau | ✅ |
 | M0 | Vorwärtsprozess | `linear_schedule`, `q_sample`, Demo `scripts/forward_demo.py` | Wie Rauschen ins Bild kommt, geschlossene Form q(x_t \| x_0) | ✅ |
 | M1 | Modell | Sinus-Zeit-Embedding, kleines U-Net (Down/Up-Pfad, Skip-Verbindungen, ResBlocks), Formen-Smoke-Test | Wie das Netz t „sieht“; warum U-Net | ✅ |
-| M2 | Training | MNIST-Loader, Loss = MSE zwischen echtem und vorhergesagtem Rauschen, Trainingsschleife auf MPS, Checkpoints, Loss-Kurve | Das eigentliche DDPM-Trainingsziel (ε-Prediction) | ⬜ |
-| M3 | Sampling | Rückwärtsprozess Schritt für Schritt (x_T → x_0), Bild-Grid, Trajektorie-Visualisierung | Wie aus Rauschen ein Bild wird | ⬜ |
+| M2 | Training | MNIST-Loader, Loss = MSE zwischen echtem und vorhergesagtem Rauschen, Trainingsschleife auf MPS, Checkpoints, Loss-Kurve | Das eigentliche DDPM-Trainingsziel (ε-Prediction) | ✅ |
+| M3 | Sampling | Rückwärtsprozess Schritt für Schritt (x_T → x_0), Bild-Grid, Trajektorie-Visualisierung | Wie aus Rauschen ein Bild wird | ✅ |
 | M4 | Experimente | (a) linear vs. cosine Schedule, (b) DDIM: weniger Sampling-Schritte, (c) Modellgröße; Metrik: Klassifikator-basierter Score auf generierten Ziffern + Loss | Kontrollierte Ablationen, Trade-off Qualität vs. Geschwindigkeit | ⬜ |
 | M5 | Konditionierung (optional) | Klassen-Label als Bedingung, Classifier-free Guidance („erzeuge eine 7“) | Brücke zu Text-Konditionierung in SDXL | ⬜ |
 | M6 | Write-up | README als Mini-Thesis: Theorie kurz, Bilder aus `docs/`, Befunde aus M4 | Erklären können, was ein Diffusionsmodell ist | ⬜ |
