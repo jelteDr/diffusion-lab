@@ -86,10 +86,9 @@ def main() -> None:
     device = "mps" if torch.backends.mps.is_available() else "cpu"
     run_dir = Path("runs") / args.run
     run_dir.mkdir(parents=True, exist_ok=True)
-    config = vars(args) | {"device": device, "schedule": "linear"}
-    (run_dir / "config.json").write_text(json.dumps(config, indent=2))
-
     loader = mnist_loader(args.batch_size)
+    config = vars(args) | {"device": device, "schedule": "linear", "steps_per_epoch": len(loader)}
+    (run_dir / "config.json").write_text(json.dumps(config, indent=2))
     schedule = linear_schedule(args.steps).to(device)
     model = UNet(base=args.base).to(device)
     ema = EMA(model)
@@ -126,7 +125,7 @@ def main() -> None:
         print(f"Epoche {epoch:3d}/{args.epochs}  Loss {avg:.4f}  ({time.time() - t0:.0f} s)")
         save_checkpoint(run_dir / "ckpt.pt", model, ema, config, epoch)
         loss_log.flush()
-        plot_loss(run_dir)  # Kurve nach jeder Epoche aktualisieren -> runs/<run>/loss.png
+        plot_loss(run_dir)  # Kurve nach jeder Epoche aktualisieren
 
     loss_log.close()
     print(f"fertig, Checkpoint: {run_dir / 'ckpt.pt'}")
