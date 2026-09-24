@@ -52,8 +52,30 @@ Sampling ~6 min pro 1000 Bilder kostet.
 - MNIST-Ziffern sind spärliche, einfache Bilder; die Feinstruktur bei kleinem t entscheidet
   über die Erkennbarkeit, und dort investiert der lineare Schedule mehr Trainingsbeispiele.
 
-**Offen:** Wiederholung mit n=5000 und 3 Seeds via DDIM; Sampling mit σ_t² = β̃_t
-(posterior variance) als Gegenprobe.
+### Nachmessung mit belastbarer Metrik (nach Exp 2)
+
+Sampler DDIM η=1, 100 Schritte (siehe Exp 2), **n=5000**, 3 Seeds. Beide Modelle bekommen
+pro Seed dasselbe Start-Rauschen (gepaarter Vergleich).
+
+| Lauf | IS ↑ | FID ↓ | FID je Seed (0 / 1 / 2) |
+|------|-----:|------:|-------------------------|
+| mnist_base (linear)   | 8,74 ± 0,07 | 14,04 ± 0,26 | 14,13 / 14,24 / 13,75 |
+| mnist_cosine (cosine) | 8,73 ± 0,04 | **13,04 ± 0,90** | 13,76 / 13,33 / 12,03 |
+
+Die FID-Streuung ist mit n=5000 von ±3–6 auf unter ±1 gefallen, und der absolute Wert
+sinkt von ~17–19 auf ~14 (bekannte Verzerrung des FID nach oben bei kleinem n).
+
+**Finaler Befund Exp 1:** Der Cosinus-Schedule hat einen **kleinen, aber konsistenten
+Vorteil im FID** (−1,0 Punkte, in 3 von 3 gepaarten Seeds besser, Differenz 0,4 / 0,9 / 1,7).
+Im IS gibt es keinen Unterschied. Der Effekt ist real, aber klein (~7 %) und weit von dem
+entfernt, was die erste Messung mit n=1000 in die *Gegenrichtung* suggeriert hatte.
+Nebenbefund: Beide Modelle erzeugen zu viele 7en (12–13 %) und zu wenige 8en (8 %); beim
+Cosinus-Modell ist das Ungleichgewicht etwas geringer.
+
+**Lehre in einem Satz:** Ohne Kenntnis der Metrik-Streuung hätte dieses Experiment die
+falsche Antwort geliefert; mit n=5000 und gepaarten Seeds ist die Antwort klein, aber klar.
+
+**Offen:** Sampling mit σ_t² = β̃_t (posterior variance) als Gegenprobe.
 
 Bilder: `docs/img/schedules_alpha_bar.png`, `docs/img/trajectory_linear.png`,
 `docs/img/trajectory_cosine.png`.
