@@ -67,9 +67,16 @@ class UNet(nn.Module):
         base: int = 32,
         ch_mults: tuple[int, ...] = (1, 2, 4),
         time_dim: int = 128,
+        num_classes: int | None = None,
     ):
+        """num_classes: falls gesetzt, wird das Netz klassenkonditioniert. Index num_classes
+        (also z. B. 10 bei zehn Ziffern) ist das "Null-Label" für unkonditionierte Vorhersage."""
         super().__init__()
         self.time_dim = time_dim
+        self.num_classes = num_classes
+        # Klassen-Embedding: ein lernbarer Vektor pro Klasse + einer fürs Null-Label.
+        # Er wird einfach auf das Zeit-Embedding addiert und erreicht so jeden ResBlock.
+        self.class_emb = nn.Embedding(num_classes + 1, time_dim) if num_classes else None
         # Sinus-Embedding -> MLP, damit das Netz die Zeit-Information verformen kann
         self.time_mlp = nn.Sequential(
             nn.Linear(time_dim, time_dim * 4), nn.SiLU(), nn.Linear(time_dim * 4, time_dim)
@@ -108,8 +115,13 @@ class UNet(nn.Module):
         self.out_norm = nn.GroupNorm(8, chs[0])
         self.out_conv = nn.Conv2d(chs[0], in_ch, kernel_size=3, padding=1)
 
-    def forward(self, x: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, t: torch.Tensor, y: torch.Tensor | None = None) -> torch.Tensor:
+        """y: Klassen-Labels (B,), nur bei konditioniertem Modell; Wert num_classes = Null-Label."""
         t_emb = self.time_mlp(timestep_embedding(t, self.time_dim))
+        if self.class_emb is not None:
+            if y is None:  # kein Label übergeben -> unkonditioniert
+                y = torch.full_like(t, self.num_classes)
+            t_emb = t_emb + self.class_emb(y)
 
         h = self.stem(x)
         skips = []

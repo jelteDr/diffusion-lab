@@ -76,18 +76,23 @@ def real_stats(clf: DigitClassifier, device: str, n: int = 10000) -> tuple[torch
     return mu, sigma
 
 
-def evaluate_images(x: torch.Tensor, clf: DigitClassifier, device: str) -> dict:
+def evaluate_images(x: torch.Tensor, clf: DigitClassifier, device: str, y: torch.Tensor | None = None) -> dict:
     probs, feats = classifier_outputs(clf, x)
     mu_r, sigma_r = real_stats(clf, device)
     mu_g, sigma_g = feature_stats(feats)
-    hist = torch.bincount(probs.argmax(1), minlength=10)
-    return {
+    pred = probs.argmax(1)
+    hist = torch.bincount(pred, minlength=10)
+    result = {
         "n": int(x.shape[0]),
         "inception_score": round(inception_score(probs), 3),
         "fid": round(frechet_distance(mu_g, sigma_g, mu_r, sigma_r), 3),
         "mean_confidence": round(float(probs.max(1).values.mean()), 4),
         "class_histogram": hist.tolist(),
     }
+    if y is not None:
+        # Konditionierung: Wie oft erkennt der Richter die angeforderte Ziffer?
+        result["label_accuracy"] = round(float((pred == y.cpu()).float().mean()), 4)
+    return result
 
 
 def main() -> None:
@@ -101,6 +106,8 @@ def main() -> None:
     parser.add_argument("--sampler", choices=["ddpm", "ddim"], default="ddpm")
     parser.add_argument("--ddim-steps", type=int, default=50)
     parser.add_argument("--eta", type=float, default=0.0)
+    parser.add_argument("--guidance", type=float, default=1.0, help="CFG-Stärke w bei konditioniertem Modell")
+    parser.add_argument("--uncond", action="store_true", help="konditioniertes Modell OHNE Labels sampeln")
     parser.add_argument("--tag", default=None, help="Name der Auswertung (Dateiname eval_<tag>.json)")
     parser.add_argument("--real", action="store_true",
                         help="Referenz: echte Trainingsbilder statt Samples bewerten (Bestwert der Metriken)")
@@ -121,18 +128,25 @@ def main() -> None:
 
     model, schedule, config = load_run(args.run, device)
     seeds = args.seeds if args.seeds else [args.seed]
+    conditional = model.num_classes is not None and not args.uncond
     tag = args.tag or (f"ddim{args.ddim_steps}" if args.sampler == "ddim" else "ddpm")
+    if model.num_classes is not None and not args.tag:
+        tag += "_uncond" if args.uncond else f"_w{args.guidance:g}"
+    # Konditioniert: Labels gleichverteilt 0..9 (i-tes Bild bekommt Ziffer i mod 10)
+    y_all = torch.arange(args.n, device=device) % 10 if conditional else None
 
     def generate(seed: int) -> tuple[torch.Tensor, float]:
         t0 = time.time()
         xs = []
         for i in range(0, args.n, args.batch):
             n_b = min(args.batch, args.n - i)
+            y_b = y_all[i : i + n_b] if conditional else None
             if args.sampler == "ddim":
                 x, _ = ddim_sample(model, schedule, n_b, device, num_steps=args.ddim_steps,
-                                   eta=args.eta, seed=seed * 100_000 + i)
+                                   eta=args.eta, seed=seed * 100_000 + i, y=y_b, guidance_scale=args.guidance)
             else:
-                x, _ = sample(model, schedule, n_b, device, seed=seed * 100_000 + i)
+                x, _ = sample(model, schedule, n_b, device, seed=seed * 100_000 + i, y=y_b,
+                              guidance_scale=args.guidance)
             xs.append(x)
         return torch.cat(xs), time.time() - t0
 
@@ -140,9 +154,10 @@ def main() -> None:
     for seed in seeds:
         x, seconds = generate(seed)
         r = {"seed": seed, "seconds": round(seconds, 1), "ms_per_image": round(1000 * seconds / args.n, 1)}
-        r |= evaluate_images(x, clf, device)
+        r |= evaluate_images(x, clf, device, y_all)
         per_seed.append(r)
-        print(f"Seed {seed}: IS {r['inception_score']:.3f}  FID {r['fid']:.2f}  ({r['ms_per_image']} ms/Bild)")
+        acc = f"  Label-Treffer {r['label_accuracy']:.3f}" if "label_accuracy" in r else ""
+        print(f"Seed {seed}: IS {r['inception_score']:.3f}  FID {r['fid']:.2f}{acc}  ({r['ms_per_image']} ms/Bild)")
 
     def mean_std(key: str) -> dict:
         vals = torch.tensor([r[key] for r in per_seed], dtype=torch.float64)
@@ -153,6 +168,8 @@ def main() -> None:
               "eta": args.eta if args.sampler == "ddim" else None, "n": args.n, "seeds": seeds,
               "inception_score": mean_std("inception_score"), "fid": mean_std("fid"),
               "mean_confidence": mean_std("mean_confidence"), "ms_per_image": mean_std("ms_per_image"),
+              "conditional": conditional, "guidance": args.guidance if conditional else None,
+              "label_accuracy": mean_std("label_accuracy") if conditional else None,
               "per_seed": per_seed}
     out = Path("runs") / args.run / f"eval_{tag}.json"
     out.write_text(json.dumps(result, indent=2))

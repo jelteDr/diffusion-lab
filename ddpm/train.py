@@ -24,13 +24,20 @@ from ddpm.plotting import plot_loss
 from ddpm.schedule import SCHEDULES, NoiseSchedule, make_schedule, q_sample
 
 
-def training_step(model: UNet, schedule: NoiseSchedule, x0: torch.Tensor) -> torch.Tensor:
+def training_step(
+    model: UNet, schedule: NoiseSchedule, x0: torch.Tensor,
+    y: torch.Tensor | None = None, p_uncond: float = 0.1,
+) -> torch.Tensor:
     """Ein DDPM-Trainingsschritt. Gibt die Loss (Skalar) zurück.
 
     Args:
-        model:    das U-Net, sagt aus (x_t, t) das Rauschen voraus
+        model:    das U-Net, sagt aus (x_t, t[, y]) das Rauschen voraus
         schedule: Noise-Schedule, liegt bereits auf dem Device von x0
         x0:       Batch sauberer Bilder, Form (B, 1, 32, 32), Werte in [-1, 1]
+        y:        Klassen-Labels (B,) bei konditioniertem Training, sonst None
+        p_uncond: Anteil der Beispiele, deren Label durch das Null-Label ersetzt wird
+                  (Classifier-free Guidance, Ho & Salimans 2022): So lernt EIN Netz
+                  beides, konditionierte und unkonditionierte Vorhersage.
     """
     # 1. t: für jedes Bild ein zufälliger Zeitschritt in [0, schedule.num_steps - 1],
     #    Form (B,), auf x0.device
@@ -41,7 +48,11 @@ def training_step(model: UNet, schedule: NoiseSchedule, x0: torch.Tensor) -> tor
     t = torch.randint(0, schedule.num_steps, (batch_size,), device=x0.device)  # zufälliges t pro Bild
     noise = torch.randn_like(x0)
     x_t = q_sample(schedule, x0, t, noise)
-    noise_pred = model(x_t, t)
+    if y is not None:
+        # Label-Dropout: zufällig p_uncond der Labels auf das Null-Label setzen
+        drop = torch.rand(batch_size, device=x0.device) < p_uncond
+        y = torch.where(drop, torch.full_like(y, model.num_classes), y)
+    noise_pred = model(x_t, t, y)
     return F.mse_loss(noise_pred, noise)
 
 
@@ -80,6 +91,8 @@ def main() -> None:
     parser.add_argument("--steps", type=int, default=1000, help="T, Anzahl Diffusionsschritte")
     parser.add_argument("--schedule", choices=list(SCHEDULES), default="linear", help="Noise-Schedule")
     parser.add_argument("--base", type=int, default=32, help="Basis-Kanalzahl des U-Nets")
+    parser.add_argument("--cond", action="store_true", help="klassenkonditioniert trainieren (10 Ziffern)")
+    parser.add_argument("--p-uncond", type=float, default=0.1, help="Label-Dropout-Anteil für CFG")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--overwrite", action="store_true", help="vorhandenen Lauf gleichen Namens überschreiben")
     args = parser.parse_args()
@@ -96,11 +109,12 @@ def main() -> None:
     config = vars(args) | {"device": device, "steps_per_epoch": len(loader)}
     (run_dir / "config.json").write_text(json.dumps(config, indent=2))
     schedule = make_schedule(args.schedule, args.steps).to(device)
-    model = UNet(base=args.base).to(device)
+    model = UNet(base=args.base, num_classes=10 if args.cond else None).to(device)
     ema = EMA(model)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
     print(f"Lauf {args.run} auf {device}: {count_params(model):,} Parameter, "
-          f"{len(loader)} Batches/Epoche, T={args.steps}, Schedule {args.schedule}")
+          f"{len(loader)} Batches/Epoche, T={args.steps}, Schedule {args.schedule}"
+          f"{', konditioniert (CFG p_uncond=' + str(args.p_uncond) + ')' if args.cond else ''}")
 
     loss_log = open(run_dir / "loss.csv", "w", newline="")
     writer = csv.writer(loss_log)
@@ -112,9 +126,10 @@ def main() -> None:
         t0 = time.time()
         running = 0.0
         pbar = tqdm(loader, desc=f"Epoche {epoch}/{args.epochs}", leave=False, unit="batch")
-        for i, (x0, _label) in enumerate(pbar, start=1):  # Labels werden (noch) nicht gebraucht
+        for i, (x0, label) in enumerate(pbar, start=1):
             x0 = x0.to(device)
-            loss = training_step(model, schedule, x0)
+            y = label.to(device) if args.cond else None
+            loss = training_step(model, schedule, x0, y, args.p_uncond)
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
             optimizer.step()

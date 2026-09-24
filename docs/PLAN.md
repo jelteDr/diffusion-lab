@@ -21,7 +21,7 @@ Legende: ✅ fertig · 🚧 in Arbeit · ⬜ offen
 | M2 | Training | MNIST-Loader, Loss = MSE zwischen echtem und vorhergesagtem Rauschen, Trainingsschleife auf MPS, Checkpoints, Loss-Kurve | Das eigentliche DDPM-Trainingsziel (ε-Prediction) | ✅ |
 | M3 | Sampling | Rückwärtsprozess Schritt für Schritt (x_T → x_0), Bild-Grid, Trajektorie-Visualisierung | Wie aus Rauschen ein Bild wird | ✅ |
 | M4 | Experimente | (a) linear vs. cosine Schedule, (b) DDIM: weniger Sampling-Schritte, (c) Modellgröße; Metrik: Klassifikator-basierter Score auf generierten Ziffern + Loss | Kontrollierte Ablationen, Trade-off Qualität vs. Geschwindigkeit | ✅ Exp 1–3 in `docs/RESULTS.md`: Modellgröße dominiert (FID 38→7,8), DDIM η=1 statt η=0, Cosinus +1 FID |
-| M5 | Konditionierung (optional) | Klassen-Label als Bedingung, Classifier-free Guidance („erzeuge eine 7“) | Brücke zu Text-Konditionierung in SDXL | ⬜ |
+| M5 | Konditionierung (optional) | Klassen-Label als Bedingung, Classifier-free Guidance („erzeuge eine 7“) | Brücke zu Text-Konditionierung in SDXL | ✅ Exp 4: cond FID 3,9 (schlägt base64 uncond), CFG-Optimum bei w≈1, DDIM-Clamp-Bug gefunden+gefixt |
 | M6 | Write-up | README als Mini-Thesis: Theorie kurz, Bilder aus `docs/`, Befunde aus M4 | Erklären können, was ein Diffusionsmodell ist | ⬜ |
 
 **Definition of Done Stufe 1:** Das Modell erzeugt erkennbare Ziffern, die Ablationen sind

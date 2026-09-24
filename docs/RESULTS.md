@@ -182,3 +182,59 @@ Bilder: `docs/img/samples_cosine_b16.png`, `samples_cosine_b32.png`, `samples_co
 Methodische Lehren: (1) Streuung der Metrik messen, bevor man Effekte interpretiert
 (n=1000 reichte nicht); (2) gepaarte Seeds; (3) Trainings-Loss ist zwischen Setups kein
 Qualitätsmaß; (4) Ergebnisse nie ohne `--run` überschreiben lassen.
+
+---
+
+## Exp 4: Klassen-Konditionierung und Classifier-free Guidance (M5)
+
+**Hypothese (vorab):** Ein klassenkonditioniertes Modell erzeugt die angeforderte Ziffer
+zuverlässig; Classifier-free Guidance (Ho & Salimans 2022) mit w≈2–4 verbessert Treffer und
+Bildschärfe, zu großes w (≥7) reduziert die Vielfalt und verschlechtert den FID.
+
+**Aufbau:** `mnist_cond` = base 32, Cosinus, 20 Epochen, Klassen-Embedding auf das
+Zeit-Embedding addiert, Label-Dropout p_uncond = 0,1 (Null-Label). Auswertung DDIM η=1,
+100 Schritte, n=2000, 2 Seeds, Labels gleichverteilt. Neue Kennzahl **Label-Treffer**:
+Anteil, bei dem der Richter die angeforderte Ziffer erkennt.
+
+| Modus | w | IS ↑ | FID ↓ | Label-Treffer | Konfidenz | ms/Bild |
+|-------|--:|-----:|------:|--------------:|----------:|--------:|
+| Null-Label (unkonditioniert) | – | 7,62 | 61,8 ± 8,7 | – | 0,907 | 55 |
+| CFG | 0 | 7,80 | 56,4 ± 3,3 | 9,9 % | 0,915 | 82 |
+| **konditioniert** | **1** | **9,56** | **3,9 ± 0,6** | **96,2 %** | 0,984 | 40 |
+| CFG | 2 | 9,97 | 36,5 ± 0,6 | 100 % | 0,999 | 83 |
+| CFG | 3 | 9,98 | 57,5 ± 1,2 | 100 % | 1,000 | 89 |
+| CFG | 5 | 9,99 | 85,9 ± 4,0 | 100 % | 1,000 | 89 |
+| CFG | 7 | 9,99 | 98,8 ± 2,4 | 100 % | 1,000 | 103 |
+
+![Guidance](img/guidance.png)
+
+**Befund 1 — Konditionierung ist der stärkste Hebel des ganzen Projekts.** Das
+konditionierte base-32-Modell erreicht bei w=1 FID 3,9 und schlägt damit das viermal größere
+unkonditionierte base-64-Modell (FID 7,8) deutlich. Erklärung: Das Label nimmt dem Netz die
+schwerste Entscheidung ab („welche Ziffer?“), es muss nur noch die Form innerhalb der Klasse
+lernen. Label-Treffer 96 % zeigt, dass die Konditionierung fast immer greift.
+
+**Befund 2 — Hypothese zu w≈2–4 NICHT bestätigt: Der FID ist bei w=1 optimal und steigt
+ab w=2 steil an.** Gleichzeitig gehen Label-Treffer auf 100 %, Konfidenz auf 1,000 und IS auf
+9,99 (Maximum 10). Das ist der klassische **Treue-Vielfalt-Konflikt**: Guidance schiebt jedes
+Bild zum „Prototyp“ seiner Klasse. Der Richter ist begeistert (jede Ziffer eindeutig), der
+FID bestraft den Verlust an Vielfalt, weil die Verteilung der generierten Bilder schmaler
+wird als die echte. Sichtbar in `docs/img/cond_w7.png`: dicke, gleichförmige Striche.
+Im CFG-Paper liegt das FID-Optimum ebenfalls nahe w≈1,1–1,3; die Feinauflösung
+(w=1,25 / 1,5) läuft.
+
+**Befund 3 — der Null-Label-Zweig allein ist schwach** (FID 62 gegen ~13 für ein eigenes
+unkonditioniertes Modell): Er bekommt nur 10 % der Trainingsbeispiele. Für CFG reicht das,
+als eigenständiger Generator nicht.
+
+**Nebenbefund (Bug, gefunden durch dieses Experiment):** Vor der Korrektur zerfielen alle
+Bilder ab w=2 zu Klecksen — aber nur mit dem DDIM-Sampler, nicht mit DDPM. Ursache: Der
+DDIM-Schritt clampte x̂_0 auf [-1, 1], rechnete den Richtungsterm aber mit dem ungeclampten,
+durch Guidance vergrößerten ε̂ weiter. Fix wie in diffusers: ε̂ nach dem Clamp aus dem
+geclampten x̂_0 zurückrechnen. Die Korrektur verbessert auch unkonditionierte Läufe leicht
+(Cosinus Seed 0: FID 13,76 → 12,56), daher werden Exp 1 und 3 neu gemessen (v2).
+
+**Praktische Lehre für SDXL:** Der Guidance-Regler (dort typisch 5–7,5) ist genau dieser
+Trade-off. Hohe Werte = prompt-treu und „glatt“, niedrige = vielfältiger, aber ungenauer.
+Dass bei MNIST schon w=2 zu viel ist, liegt daran, dass zehn Klassen wenig Spielraum lassen;
+bei Text-Prompts mit Milliarden möglicher Bilder liegt das Optimum höher.
