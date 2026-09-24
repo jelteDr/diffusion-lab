@@ -21,7 +21,7 @@ from tqdm import tqdm
 
 from ddpm.data import to_image
 from ddpm.model import UNet
-from ddpm.schedule import NoiseSchedule, _gather, linear_schedule
+from ddpm.schedule import NoiseSchedule, _gather, make_schedule
 
 
 @torch.no_grad()
@@ -81,6 +81,81 @@ def sample(
     return x, trajectory
 
 
+def ddim_timesteps(num_train_steps: int, num_sample_steps: int) -> list[int]:
+    """Teilfolge der Trainings-Zeitschritte, absteigend, z. B. T=1000, 50 Schritte:
+    [999, 979, 959, ..., 19]. Der Sprung geht jeweils zum nächsten Eintrag, zuletzt zu -1 (= x_0)."""
+    stride = num_train_steps // num_sample_steps
+    return list(range(num_train_steps - 1, -1, -stride))[:num_sample_steps]
+
+
+@torch.no_grad()
+def ddim_step(
+    model: UNet, schedule: NoiseSchedule, x_t: torch.Tensor, t: int, t_prev: int, eta: float = 0.0
+) -> torch.Tensor:
+    """Ein DDIM-Schritt (Song et al. 2021) von t nach t_prev, wobei t_prev < t beliebig weit
+    entfernt sein darf. t_prev = -1 bedeutet: direkt nach x_0 (alpha_bar_prev = 1).
+
+    Idee: Aus ε̂ zuerst das saubere Bild x̂_0 schätzen, dann x_{t_prev} so konstruieren,
+    als hätte man x̂_0 mit dem Vorwärtsprozess bis t_prev verrauscht, aber mit ε̂ statt
+    frischem Rauschen (deterministisch bei eta = 0):
+
+        x̂_0      = (x_t - sqrt(1 - ᾱ_t) * ε̂) / sqrt(ᾱ_t)
+        σ        = eta * sqrt((1 - ᾱ_prev) / (1 - ᾱ_t)) * sqrt(1 - ᾱ_t / ᾱ_prev)
+        x_{prev} = sqrt(ᾱ_prev) * x̂_0 + sqrt(1 - ᾱ_prev - σ²) * ε̂ + σ * z
+
+    eta = 0: deterministisch (DDIM), eta = 1: entspricht DDPM-Rauschen.
+    """
+    batch_size = x_t.shape[0]
+    t_batch = torch.full((batch_size,), t, device=x_t.device, dtype=torch.long)
+    alpha_bar_t = _gather(schedule.alphas_cumprod, t_batch, x_t.shape)
+    if t_prev >= 0:
+        t_prev_batch = torch.full((batch_size,), t_prev, device=x_t.device, dtype=torch.long)
+        alpha_bar_prev = _gather(schedule.alphas_cumprod, t_prev_batch, x_t.shape)
+    else:
+        alpha_bar_prev = torch.ones_like(alpha_bar_t)
+    # 1. eps_hat = model(x_t, t_batch)
+    # 2. x0_pred aus x_t und eps_hat (optional .clamp(-1, 1), stabilisiert frühe Schritte)
+    # 3. sigma nach der Formel (bei eta = 0 ist sigma = 0)
+    # 4. x_prev = sqrt(alpha_bar_prev) * x0_pred + sqrt(1 - alpha_bar_prev - sigma**2) * eps_hat
+    #    und, falls eta > 0, + sigma * randn_like(x_t)
+    eps_hat = model(x_t,t_batch)
+    x0_pred = ((x_t -(1.0-alpha_bar_t).sqrt()*eps_hat) / alpha_bar_t.sqrt()).clamp(-1,1)
+    sigma = eta * ((1.0 -alpha_bar_prev)/(1.0 - alpha_bar_t)).sqrt() * (1.0 -alpha_bar_t / alpha_bar_prev).sqrt()
+    direction = (1.0-alpha_bar_prev -sigma**2).sqrt()*eps_hat
+    x_prev = alpha_bar_prev.sqrt() * x0_pred + direction
+    if eta > 0:
+        x_prev = x_prev + sigma * torch.randn_like(x_t)
+    return x_prev
+
+
+@torch.no_grad()
+def ddim_sample(
+    model: UNet,
+    schedule: NoiseSchedule,
+    n: int,
+    device: str,
+    num_steps: int = 50,
+    eta: float = 0.0,
+    keep_every: int | None = None,
+    seed: int | None = None,
+) -> tuple[torch.Tensor, list[torch.Tensor]]:
+    """Erzeugt n Bilder mit DDIM in num_steps Schritten (statt T)."""
+    generator = torch.Generator(device=device)
+    if seed is not None:
+        generator.manual_seed(seed)
+    x = torch.randn(n, 1, 32, 32, device=device, generator=generator)
+
+    steps = ddim_timesteps(schedule.num_steps, num_steps)
+    trajectory: list[torch.Tensor] = []
+    for i, t in enumerate(tqdm(steps, desc=f"DDIM {num_steps}", unit="Schritt", leave=False)):
+        if keep_every and i % keep_every == 0:
+            trajectory.append(x.cpu())
+        t_prev = steps[i + 1] if i + 1 < len(steps) else -1
+        x = ddim_step(model, schedule, x, t, t_prev, eta)
+    trajectory.append(x.cpu())
+    return x, trajectory
+
+
 def load_run(run: str, device: str, use_ema: bool = True) -> tuple[UNet, NoiseSchedule, dict]:
     """Lädt Modell (EMA- oder Roh-Gewichte) und Schedule eines Laufs."""
     run_dir = Path("runs") / run
@@ -89,7 +164,7 @@ def load_run(run: str, device: str, use_ema: bool = True) -> tuple[UNet, NoiseSc
     model = UNet(base=config["base"]).to(device)
     model.load_state_dict(ckpt["ema"] if use_ema else ckpt["model"])
     model.eval()
-    schedule = linear_schedule(config["steps"]).to(device)
+    schedule = make_schedule(config.get("schedule", "linear"), config["steps"]).to(device)
     return model, schedule, config
 
 
@@ -107,6 +182,9 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--no-ema", action="store_true", help="Roh- statt EMA-Gewichte nutzen")
     parser.add_argument("--keep-every", type=int, default=100, help="Zwischenstand alle k Schritte")
+    parser.add_argument("--sampler", choices=["ddpm", "ddim"], default="ddpm")
+    parser.add_argument("--ddim-steps", type=int, default=50)
+    parser.add_argument("--eta", type=float, default=0.0, help="DDIM-Stochastik, 0 = deterministisch")
     args = parser.parse_args()
 
     device = "mps" if torch.backends.mps.is_available() else "cpu"
@@ -114,10 +192,17 @@ def main() -> None:
     print(f"Lauf {args.run} (Epoche {config.get('epochs')}, T={schedule.num_steps}) auf {device}, "
           f"{'EMA' if not args.no_ema else 'Roh'}-Gewichte")
 
-    x0, trajectory = sample(model, schedule, args.n, device, keep_every=args.keep_every, seed=args.seed)
+    if args.sampler == "ddim":
+        keep = max(1, args.ddim_steps // 10)  # ~10 Zwischenstände wie beim DDPM-Sampler
+        x0, trajectory = ddim_sample(model, schedule, args.n, device, num_steps=args.ddim_steps,
+                                     eta=args.eta, keep_every=keep, seed=args.seed)
+    else:
+        x0, trajectory = sample(model, schedule, args.n, device, keep_every=args.keep_every, seed=args.seed)
 
     run_dir = Path("runs") / args.run
     suffix = "" if not args.no_ema else "_raw"
+    if args.sampler == "ddim":
+        suffix += f"_ddim{args.ddim_steps}"
     grid = make_grid(to_image(x0), nrow=int(args.n ** 0.5), padding=1)
     save_image(grid, run_dir / f"samples{suffix}.png")
     save_trajectory_grid(trajectory, run_dir / f"trajectory{suffix}.png")

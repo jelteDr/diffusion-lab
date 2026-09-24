@@ -21,7 +21,7 @@ from tqdm import tqdm
 from ddpm.data import mnist_loader
 from ddpm.model import UNet, count_params
 from ddpm.plotting import plot_loss
-from ddpm.schedule import NoiseSchedule, linear_schedule, q_sample
+from ddpm.schedule import SCHEDULES, NoiseSchedule, make_schedule, q_sample
 
 
 def training_step(model: UNet, schedule: NoiseSchedule, x0: torch.Tensor) -> torch.Tensor:
@@ -78,23 +78,29 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--lr", type=float, default=2e-4)
     parser.add_argument("--steps", type=int, default=1000, help="T, Anzahl Diffusionsschritte")
+    parser.add_argument("--schedule", choices=list(SCHEDULES), default="linear", help="Noise-Schedule")
     parser.add_argument("--base", type=int, default=32, help="Basis-Kanalzahl des U-Nets")
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--overwrite", action="store_true", help="vorhandenen Lauf gleichen Namens überschreiben")
     args = parser.parse_args()
+
+    run_dir = Path("runs") / args.run
+    if (run_dir / "ckpt.pt").exists() and not args.overwrite:
+        raise SystemExit(f"Lauf '{args.run}' existiert schon ({run_dir}). "
+                         f"Anderen Namen mit --run wählen oder --overwrite setzen.")
 
     torch.manual_seed(args.seed)
     device = "mps" if torch.backends.mps.is_available() else "cpu"
-    run_dir = Path("runs") / args.run
     run_dir.mkdir(parents=True, exist_ok=True)
     loader = mnist_loader(args.batch_size)
-    config = vars(args) | {"device": device, "schedule": "linear", "steps_per_epoch": len(loader)}
+    config = vars(args) | {"device": device, "steps_per_epoch": len(loader)}
     (run_dir / "config.json").write_text(json.dumps(config, indent=2))
-    schedule = linear_schedule(args.steps).to(device)
+    schedule = make_schedule(args.schedule, args.steps).to(device)
     model = UNet(base=args.base).to(device)
     ema = EMA(model)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
     print(f"Lauf {args.run} auf {device}: {count_params(model):,} Parameter, "
-          f"{len(loader)} Batches/Epoche, T={args.steps}")
+          f"{len(loader)} Batches/Epoche, T={args.steps}, Schedule {args.schedule}")
 
     loss_log = open(run_dir / "loss.csv", "w", newline="")
     writer = csv.writer(loss_log)

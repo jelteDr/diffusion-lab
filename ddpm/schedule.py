@@ -13,6 +13,7 @@ alpha_bar_t = alpha_1 * ... * alpha_t gilt in geschlossener Form:
 Man kann also für jedes beliebige t direkt von x_0 nach x_t springen.
 """
 
+import math
 from dataclasses import dataclass
 
 import torch
@@ -42,6 +43,45 @@ def linear_schedule(num_steps: int = 1000, beta_start: float = 1e-4, beta_end: f
     alphas = 1.0 - betas
     alphas_cumprod = torch.cumprod(alphas, dim=0)
     return NoiseSchedule(betas, alphas, alphas_cumprod)
+
+
+def cosine_schedule(num_steps: int = 1000, s: float = 0.008, max_beta: float = 0.999) -> NoiseSchedule:
+    """Cosinus-Schedule aus "Improved DDPM" (Nichol & Dhariwal 2021).
+
+    Statt beta_t direkt festzulegen, wird alpha_bar_t als Kurve vorgegeben:
+
+        f(t) = cos( (t/T + s) / (1 + s) * pi/2 )^2        für t = 0 .. T
+        alpha_bar_t = f(t) / f(0)
+
+    und beta_t daraus zurückgerechnet:  beta_t = 1 - alpha_bar_t / alpha_bar_{t-1},
+    nach oben auf max_beta begrenzt, damit die letzten Schritte nicht explodieren.
+    Der kleine Offset s verhindert, dass beta_t ganz am Anfang praktisch 0 ist.
+    """
+    # TODO(human): Berechne betas nach der Formel oben und gib einen NoiseSchedule zurück.
+    # Skizze:
+    #   steps = torch.arange(num_steps + 1, dtype=torch.float32)     T+1 Stützstellen: t = 0 .. T
+    #   f = torch.cos(((steps / num_steps) + s) / (1 + s) * math.pi / 2) ** 2
+    #   alpha_bar = f / f[0]
+    #   betas = 1 - alpha_bar[1:] / alpha_bar[:-1]                    Form (T,)
+    #   betas = betas.clamp(max=max_beta)
+    #   alphas, alphas_cumprod wie im linearen Schedule aus betas ableiten
+    steps = torch.arange(num_steps+1, dtype=torch.float32)
+    f = torch.cos(((steps / num_steps) + s) / (1+s) * math.pi / 2) **2
+    alpha_bar = f / f[0]
+    betas = (1.0 - alpha_bar[1:] / alpha_bar[:-1]).clamp(max=max_beta)
+    alphas = 1.0 - betas
+    alphas_cumprod = torch.cumprod(alphas, dim=0)
+    return NoiseSchedule(betas, alphas, alphas_cumprod)
+
+
+SCHEDULES = {"linear": linear_schedule, "cosine": cosine_schedule}
+
+
+def make_schedule(name: str, num_steps: int = 1000) -> NoiseSchedule:
+    """Schedule per Name bauen ("linear" oder "cosine")."""
+    if name not in SCHEDULES:
+        raise ValueError(f"Unbekannter Schedule '{name}', erlaubt: {list(SCHEDULES)}")
+    return SCHEDULES[name](num_steps)
 
 
 def _gather(values: torch.Tensor, t: torch.Tensor, x_shape: torch.Size) -> torch.Tensor:
