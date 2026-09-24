@@ -131,3 +131,54 @@ als bei den anderen Punkten (±3–5). Der FID-Rauschanteil hängt also selbst v
 
 **Offen:** (a) Exp 1 (Schedules) mit DDIM η=1/100 und n=5000 nachmessen, jetzt bezahlbar
 (~3 min statt 30). (b) Einfluss des x̂_0-Clamps bei η=0 prüfen. (c) η zwischen 0 und 1.
+
+---
+
+## Exp 3: Modellgröße
+
+**Hypothese (vorab):** Ein größeres U-Net (base=64, 8,1 M Parameter) verbessert den FID
+deutlich, ein kleineres (base=16, 0,67 M) verschlechtert ihn; das große Modell reduziert
+auch das 7/8-Ungleichgewicht.
+
+**Aufbau:** Cosinus-Schedule (Gewinner aus Exp 1), 20 Epochen, sonst identisch. Auswertung
+DDIM η=1, 100 Schritte, n=5000, 3 gepaarte Seeds. Referenz echte Ziffern bei n=5000:
+IS 9,75 · FID 1,69.
+
+| Lauf | base | Parameter | Training/Epoche | Loss (Ep. 20) | IS ↑ | FID ↓ | 8er-Anteil | ms/Bild |
+|------|-----:|----------:|----------------:|--------------:|-----:|------:|-----------:|--------:|
+| mnist_cosine_b16 | 16 | 0,67 M | 44 s  | 0,033 | 7,96 ± 0,03 | 38,0 ± 1,1 | 8,5 % | 22 |
+| mnist_cosine     | 32 | 2,17 M | ~90 s | 0,031 | 8,73 ± 0,04 | 13,0 ± 0,9 | 8,4 % | 49 |
+| mnist_cosine_b64 | 64 | 8,10 M | ~380 s | 0,030 | **9,10 ± 0,02** | **7,8 ± 1,1** | 9,0 % | ~170–200* |
+
+\* Seed 0 lief mit 522 ms/Bild, Seeds 1–2 mit 207/171 ms: Systemlast, nicht Modell.
+
+![Modellgröße](img/model_size.png)
+
+**Befund: Hypothese bestätigt, Modellgröße ist mit Abstand der stärkste Hebel.**
+Von base 16 auf 64 fällt der FID von 38 auf 7,8 (Faktor 5) und der IS steigt von 7,96 auf
+9,10 (Referenz echte Ziffern 9,75). Zum Vergleich: Der Schedule-Effekt (Exp 1) war 1 FID-Punkt.
+Der Trainings-Loss unterscheidet sich dabei nur in der dritten Nachkommastelle (0,033 →
+0,030), was erneut zeigt, wie wenig die ε-MSE über Bildqualität aussagt.
+Das große Modell erzeugt auch die 8 nahezu ausgewogen (9,0 % statt 8,4 %), bleibt aber bei
+der 7 leicht über (11,9 %).
+
+**Kosten:** 12× mehr Parameter = 8,6× längeres Training (2 h statt 15 min für 20 Epochen)
+und ~4× teureres Sampling. Für MNIST wäre base=64 mit mehr Epochen der nächste Schritt;
+die Loss-Kurve ist bei Epoche 20 noch nicht flach.
+
+Bilder: `docs/img/samples_cosine_b16.png`, `samples_cosine_b32.png`, `samples_cosine_b64.png`.
+
+---
+
+## Zusammenfassung M4
+
+| Hebel | Effekt auf FID (n=5000) | Kosten |
+|-------|------------------------:|--------|
+| Modellgröße base 16 → 64 | 38 → 7,8 | 8,6× Trainingszeit, 4× Sampling |
+| Sampler DDIM η=0 → η=1 (50 Schritte) | 36 → 21 (n=1000) | keine |
+| Sampling-Schritte η=1, 50 → 250 | 21 → 17 (n=1000) | 5× Sampling-Zeit |
+| Schedule linear → cosine | 14,0 → 13,0 | keine |
+
+Methodische Lehren: (1) Streuung der Metrik messen, bevor man Effekte interpretiert
+(n=1000 reichte nicht); (2) gepaarte Seeds; (3) Trainings-Loss ist zwischen Setups kein
+Qualitätsmaß; (4) Ergebnisse nie ohne `--run` überschreiben lassen.
