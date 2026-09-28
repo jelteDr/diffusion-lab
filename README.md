@@ -13,7 +13,7 @@ die erste Messung in die Irre führte.
 </p>
 <p align="center"><sub>Links: „Erzeuge Ziffer k“ (klassenkonditioniertes Modell, FID 3,9). Rechts: derselbe Prozess Schritt für Schritt, von reinem Rauschen (links) zur fertigen Ziffer (rechts).</sub></p>
 
-> **Portfolio-Kontext.** Zweites Projekt neben [book-RAG](https://github.com/jelteDr/book-RAG).
+> **Portfolio-Kontext.** 
 > Ziel: nicht ein Tutorial nachbauen, sondern verstehen, *warum* Diffusionsmodelle funktionieren,
 > und Behauptungen aus Papern am eigenen Setup nachmessen. Ergebnis-Details und alle Zahlen in
 > [`docs/RESULTS.md`](docs/RESULTS.md), Fahrplan in [`docs/PLAN.md`](docs/PLAN.md).
