@@ -4,7 +4,11 @@ Alle Zahlen: MNIST 32x32, U-Net mit 2,17 M Parametern (base=32), 20 Epochen, Bat
 AdamW lr 2e-4, EMA 0.999, Seed 0, Apple M5 (MPS). Bewertung mit dem Klassifikator-Richter
 (`ddpm/classifier.py`, 99,0 % Test-Genauigkeit) auf 1000 generierten Bildern.
 
-**Referenz (echte MNIST-Bilder, n=1000):** IS 9,71 · FID 5,24 · Konfidenz 0,991.
+**Referenz (echte MNIST-Bilder):** n=1000: IS 9,71 · FID 5,24 · n=5000: IS 9,75 · FID 1,69.
+
+**Hinweis zur Messversion:** Alle n=5000-Tabellen in Exp 1 und 3 zeigen die **v2-Messung**
+mit dem korrigierten DDIM-Schritt (Clamp-Fix aus Exp 4, JSON-Tag `_v2`). Die v1-Werte
+(vor dem Fix, ~1–5 FID-Punkte höher, gleiche Rangfolge) sind in Klammern angegeben.
 Der FID ist auch zwischen echten Bildern nicht 0, weil 1000 Bilder die Verteilung nur
 schätzen. **Achtung:** für generierte Bilder ist die Streuung deutlich größer (siehe Exp 1:
 ±3 FID-Punkte zwischen zwei Sampling-Seeds desselben Modells).
@@ -57,20 +61,20 @@ Sampling ~6 min pro 1000 Bilder kostet.
 Sampler DDIM η=1, 100 Schritte (siehe Exp 2), **n=5000**, 3 Seeds. Beide Modelle bekommen
 pro Seed dasselbe Start-Rauschen (gepaarter Vergleich).
 
-| Lauf | IS ↑ | FID ↓ | FID je Seed (0 / 1 / 2) |
-|------|-----:|------:|-------------------------|
-| mnist_base (linear)   | 8,74 ± 0,07 | 14,04 ± 0,26 | 14,13 / 14,24 / 13,75 |
-| mnist_cosine (cosine) | 8,73 ± 0,04 | **13,04 ± 0,90** | 13,76 / 13,33 / 12,03 |
+| Lauf | IS ↑ | FID ↓ (v2) | FID je Seed (0 / 1 / 2) | FID v1 |
+|------|-----:|-----------:|-------------------------|-------:|
+| mnist_base (linear)   | 8,81 ± 0,03 | 11,88 ± 1,01 | 10,79 / 12,07 / 12,78 | (14,04) |
+| mnist_cosine (cosine) | 8,80 ± 0,05 | **11,10 ± 0,88** | 10,65 / 12,11 / 10,53 | (13,04) |
 
-Die FID-Streuung ist mit n=5000 von ±3–6 auf unter ±1 gefallen, und der absolute Wert
-sinkt von ~17–19 auf ~14 (bekannte Verzerrung des FID nach oben bei kleinem n).
+Die FID-Streuung ist mit n=5000 von ±3–6 auf ~±1 gefallen, und der absolute Wert sinkt
+von ~17–19 auf ~12 (bekannte Verzerrung des FID nach oben bei kleinem n).
 
-**Finaler Befund Exp 1:** Der Cosinus-Schedule hat einen **kleinen, aber konsistenten
-Vorteil im FID** (−1,0 Punkte, in 3 von 3 gepaarten Seeds besser, Differenz 0,4 / 0,9 / 1,7).
-Im IS gibt es keinen Unterschied. Der Effekt ist real, aber klein (~7 %) und weit von dem
+**Finaler Befund Exp 1: allenfalls ein kleiner Vorteil für den Cosinus-Schedule, nicht
+robust.** Im Mittel −0,8 FID, aber gepaart nur in 2 von 3 Seeds besser (Differenzen
++0,14 / −0,04 / +2,25); Seed 1 ist praktisch gleich, der Mittelwert wird von Seed 2 getragen.
+In der v1-Messung waren es noch 3 von 3 (−1,0). Im IS kein Unterschied. Das ist weit von dem
 entfernt, was die erste Messung mit n=1000 in die *Gegenrichtung* suggeriert hatte.
-Nebenbefund: Beide Modelle erzeugen zu viele 7en (12–13 %) und zu wenige 8en (8 %); beim
-Cosinus-Modell ist das Ungleichgewicht etwas geringer.
+Nebenbefund: Beide Modelle erzeugen zu viele 7en (12–13 %) und zu wenige 8en (8 %).
 
 **Lehre in einem Satz:** Ohne Kenntnis der Metrik-Streuung hätte dieses Experiment die
 falsche Antwort geliefert; mit n=5000 und gepaarten Seeds ist die Antwort klein, aber klar.
@@ -146,20 +150,20 @@ IS 9,75 · FID 1,69.
 
 | Lauf | base | Parameter | Training/Epoche | Loss (Ep. 20) | IS ↑ | FID ↓ | 8er-Anteil | ms/Bild |
 |------|-----:|----------:|----------------:|--------------:|-----:|------:|-----------:|--------:|
-| mnist_cosine_b16 | 16 | 0,67 M | 44 s  | 0,033 | 7,96 ± 0,03 | 38,0 ± 1,1 | 8,5 % | 22 |
-| mnist_cosine     | 32 | 2,17 M | ~90 s | 0,031 | 8,73 ± 0,04 | 13,0 ± 0,9 | 8,4 % | 49 |
-| mnist_cosine_b64 | 64 | 8,10 M | ~380 s | 0,030 | **9,10 ± 0,02** | **7,8 ± 1,1** | 9,0 % | ~170–200* |
+| mnist_cosine_b16 | 16 | 0,67 M | 44 s  | 0,033 | 8,15 ± 0,05 | 32,4 ± 2,4 (v1 38,0) | 7,7 % | 22 |
+| mnist_cosine     | 32 | 2,17 M | ~90 s | 0,031 | 8,80 ± 0,05 | 11,1 ± 0,9 (v1 13,0) | 8,0 % | 49 |
+| mnist_cosine_b64 | 64 | 8,10 M | ~380 s | 0,030 | **9,15 ± 0,03** | **6,6 ± 0,8** (v1 7,8) | 8,8 % | ~170–200* |
 
 \* Seed 0 lief mit 522 ms/Bild, Seeds 1–2 mit 207/171 ms: Systemlast, nicht Modell.
 
 ![Modellgröße](img/model_size.png)
 
 **Befund: Hypothese bestätigt, Modellgröße ist mit Abstand der stärkste Hebel.**
-Von base 16 auf 64 fällt der FID von 38 auf 7,8 (Faktor 5) und der IS steigt von 7,96 auf
-9,10 (Referenz echte Ziffern 9,75). Zum Vergleich: Der Schedule-Effekt (Exp 1) war 1 FID-Punkt.
+Von base 16 auf 64 fällt der FID von 32 auf 6,6 (Faktor 5) und der IS steigt von 8,15 auf
+9,15 (Referenz echte Ziffern 9,75). Zum Vergleich: Der Schedule-Effekt (Exp 1) war 1 FID-Punkt.
 Der Trainings-Loss unterscheidet sich dabei nur in der dritten Nachkommastelle (0,033 →
 0,030), was erneut zeigt, wie wenig die ε-MSE über Bildqualität aussagt.
-Das große Modell erzeugt auch die 8 nahezu ausgewogen (9,0 % statt 8,4 %), bleibt aber bei
+Das große Modell erzeugt auch die 8 etwas ausgewogener (8,8 % statt 8,0 %), bleibt aber bei
 der 7 leicht über (11,9 %).
 
 **Kosten:** 12× mehr Parameter = 8,6× längeres Training (2 h statt 15 min für 20 Epochen)
@@ -170,14 +174,15 @@ Bilder: `docs/img/samples_cosine_b16.png`, `samples_cosine_b32.png`, `samples_co
 
 ---
 
-## Zusammenfassung M4
+## Zusammenfassung M4 + M5 (alle Hebel, FID n=5000 v2)
 
 | Hebel | Effekt auf FID (n=5000) | Kosten |
 |-------|------------------------:|--------|
-| Modellgröße base 16 → 64 | 38 → 7,8 | 8,6× Trainingszeit, 4× Sampling |
+| Klassen-Konditionierung (Exp 4, base 32) | 11,1 → **3,9** | Labels nötig, sonst keine |
+| Modellgröße base 16 → 64 | 32 → 6,6 | 8,6× Trainingszeit, 4× Sampling |
 | Sampler DDIM η=0 → η=1 (50 Schritte) | 36 → 21 (n=1000) | keine |
 | Sampling-Schritte η=1, 50 → 250 | 21 → 17 (n=1000) | 5× Sampling-Zeit |
-| Schedule linear → cosine | 14,0 → 13,0 | keine |
+| Schedule linear → cosine | 11,9 → 11,1 (nicht robust) | keine |
 
 Methodische Lehren: (1) Streuung der Metrik messen, bevor man Effekte interpretiert
 (n=1000 reichte nicht); (2) gepaarte Seeds; (3) Trainings-Loss ist zwischen Setups kein
@@ -201,6 +206,8 @@ Anteil, bei dem der Richter die angeforderte Ziffer erkennt.
 | Null-Label (unkonditioniert) | – | 7,62 | 61,8 ± 8,7 | – | 0,907 | 55 |
 | CFG | 0 | 7,80 | 56,4 ± 3,3 | 9,9 % | 0,915 | 82 |
 | **konditioniert** | **1** | **9,56** | **3,9 ± 0,6** | **96,2 %** | 0,984 | 40 |
+| CFG | 1,25 | 9,83 | 9,1 ± 0,7 | 99,2 % | – | 82 |
+| CFG | 1,5 | 9,91 | 17,4 ± 0,9 | 99,8 % | – | 83 |
 | CFG | 2 | 9,97 | 36,5 ± 0,6 | 100 % | 0,999 | 83 |
 | CFG | 3 | 9,98 | 57,5 ± 1,2 | 100 % | 1,000 | 89 |
 | CFG | 5 | 9,99 | 85,9 ± 4,0 | 100 % | 1,000 | 89 |
@@ -220,8 +227,10 @@ ab w=2 steil an.** Gleichzeitig gehen Label-Treffer auf 100 %, Konfidenz auf 1,0
 Bild zum „Prototyp“ seiner Klasse. Der Richter ist begeistert (jede Ziffer eindeutig), der
 FID bestraft den Verlust an Vielfalt, weil die Verteilung der generierten Bilder schmaler
 wird als die echte. Sichtbar in `docs/img/cond_w7.png`: dicke, gleichförmige Striche.
-Im CFG-Paper liegt das FID-Optimum ebenfalls nahe w≈1,1–1,3; die Feinauflösung
-(w=1,25 / 1,5) läuft.
+Die Feinauflösung bestätigt: schon w=1,25 kostet 5 FID-Punkte, w=1,5 verdreifacht den
+Wert. Das Optimum liegt bei w=1 (oder knapp darüber, unter 1,25 nicht gemessen). Im
+CFG-Paper liegt es bei w≈1,1–1,3 auf ImageNet; auf MNIST mit nur zehn eng definierten Klassen
+ist der Spielraum für Guidance kleiner.
 
 **Befund 3 — der Null-Label-Zweig allein ist schwach** (FID 62 gegen ~13 für ein eigenes
 unkonditioniertes Modell): Er bekommt nur 10 % der Trainingsbeispiele. Für CFG reicht das,
@@ -232,7 +241,9 @@ Bilder ab w=2 zu Klecksen — aber nur mit dem DDIM-Sampler, nicht mit DDPM. Urs
 DDIM-Schritt clampte x̂_0 auf [-1, 1], rechnete den Richtungsterm aber mit dem ungeclampten,
 durch Guidance vergrößerten ε̂ weiter. Fix wie in diffusers: ε̂ nach dem Clamp aus dem
 geclampten x̂_0 zurückrechnen. Die Korrektur verbessert auch unkonditionierte Läufe leicht
-(Cosinus Seed 0: FID 13,76 → 12,56), daher werden Exp 1 und 3 neu gemessen (v2).
+(alle Läufe: 1–5 FID-Punkte, gleiche Rangfolge), daher wurden Exp 1 und 3 neu gemessen (v2,
+Tabellen oben aktualisiert). Ein Bug in einem Experiment kann also stillschweigend alle
+vorherigen Messungen verzerren, ohne dass es dort auffällt.
 
 **Praktische Lehre für SDXL:** Der Guidance-Regler (dort typisch 5–7,5) ist genau dieser
 Trade-off. Hohe Werte = prompt-treu und „glatt“, niedrige = vielfältiger, aber ungenauer.

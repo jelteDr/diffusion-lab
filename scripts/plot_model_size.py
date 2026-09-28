@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import NullFormatter
 
 RUNS = [("mnist_cosine_b16", 16, 0.67), ("mnist_cosine", 32, 2.17), ("mnist_cosine_b64", 64, 8.10)]
-TAG = "ddim100_eta1_n5000"
+TAG = "ddim100_eta1_n5000_v2"
 
 params, fid, fid_sd, is_, is_sd = [], [], [], [], []
 for run, base, mparams in RUNS:
