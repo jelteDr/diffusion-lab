@@ -249,3 +249,111 @@ vorherigen Messungen verzerren, ohne dass es dort auffällt.
 Trade-off. Hohe Werte = prompt-treu und „glatt“, niedrige = vielfältiger, aber ungenauer.
 Dass bei MNIST schon w=2 zu viel ist, liegt daran, dass zehn Klassen wenig Spielraum lassen;
 bei Text-Prompts mit Milliarden möglicher Bilder liegt das Optimum höher.
+
+---
+
+# Stufe 2: SDXL lokal
+
+Alle Zahlen: SDXL Base 1.0 in fp16 mit fp16-Fix-VAE, Apple M5 (MacBook Air, 24 GB), MPS.
+768×768 Pixel, 25 Schritte, drei Prompts, vier Seeds (0–3), CPU-Generator (reproduzierbar).
+Bewertung mit zwei CLIP-Richtern: **OpenAI ViT-L/14** (Literatur-Standard, aber derselbe
+CLIP-Typ wie der erste SDXL-Text-Encoder) und **LAION ViT-B/32** (andere Gewichte und
+Trainingsdaten, unabhängige Gegenprobe). CLIP-Score = 100 · max(cos(Bild, Text), 0).
+Kontrolle: Ein unpassender Prompt („a photo of a cat sleeping on a sofa“) erreicht auf den
+Fuchsbildern 6–17 Punkte, der passende 26–39. Die nutzbare Spanne beginnt also bei ~15, nicht bei 0.
+
+| Prompt | Inhalt | Prüft |
+|--------|--------|-------|
+| fox | a red fox sitting in a snowy forest, golden hour, photo | Motiv + Attribute |
+| cabin | a cozy wooden cabin by a lake at dusk, warm light in the windows, oil painting | Szene + Malstil |
+| shapes | a red cube on top of a blue sphere, next to a green pyramid, studio lighting | Komposition, Farbbindung |
+
+## Exp 5: Guidance-Stärke bei SDXL
+
+**Hypothese (vorab):** Anders als bei MNIST (Optimum w=1, Exp 4) liegt das Optimum bei SDXL
+deutlich höher, weil ein Text-Prompt viel mehr Spielraum lässt als zehn Ziffern. Der
+Treue-Vielfalt-Konflikt tritt trotzdem auf: Vielfalt sinkt, Sättigung steigt mit w.
+
+**Aufbau:** Scheduler Euler, w ∈ {1, 3, 5, 7,5, 12}, 3 Prompts × 4 Seeds = 60 Bilder.
+
+| w | CLIP L14 ↑ | CLIP B32 ↑ | Vielfalt ↑ (fox, cabin) | Sättigung |
+|--:|-----------:|-----------:|------------------------:|----------:|
+| 1   | 26,5 | 33,3 | 0,163 | 0,248 |
+| 3   | 28,6 | 35,8 | 0,077 | 0,268 |
+| **5** | **29,3** | **36,6** | 0,065 | 0,314 |
+| 7,5 | 29,5 | 37,0 | 0,046 | 0,357 |
+| 12  | 29,3 | 36,3 | 0,050 | 0,414 |
+
+Mittel über die drei Prompts (CLIP, Sättigung) bzw. über fox und cabin (Vielfalt).
+
+![Exp 5](img/sdxl_exp5_clip.png)
+![Guidance-Raster Fuchs](img/sdxl_guidance_grid_fox.png)
+
+**Befund 1 — Hypothese bestätigt: Das Optimum liegt bei w≈5–7,5.** Beide Richter steigen von
+w=1 bis 5 deutlich und bleiben danach flach. Bei w=1 ignoriert SDXL Teile des Prompts
+(im Raster: kein Schnee, stattdessen Herbstpflanzen).
+
+**Befund 2 — Treue sättigt, Übersättigung nicht.** Die Vielfalt halbiert sich schon zwischen
+w=1 und w=3, die Sättigung steigt über alle Stufen weiter (0,25 → 0,41). Ab w≈5 kauft mehr
+Guidance keine Treue mehr, nur Farbe und Gleichförmigkeit. **Gewählt für Exp 6: w=5**
+(Plateau-Beginn, geringste Übersättigung, zugleich diffusers-Standard für SDXL).
+
+**Befund 3 — Komposition scheitert unabhängig von w.** „shapes“ erreicht nur 23–24 Punkte
+(L14) bei großer Streuung und bleibt bei jeder Guidance-Stärke vielfältig, d. h. das Modell
+findet keine stabile Lösung. Erklärung: CLIP kodiert gut, *welche* Objekte vorkommen, aber
+schlecht, *wie* sie zueinander stehen und welche Farbe zu welchem Objekt gehört.
+
+**Vergleich mit Stufe 1:** Dasselbe Phänomen, ein anderes Optimum. Bei zehn Klassen war
+schon w=1,25 zu viel (FID +5), bei Text liegt der Kipppunkt eine Größenordnung höher.
+
+## Exp 6: Scheduler im Vergleich
+
+**Hypothese (vorab):** Bei 25 Schritten liegen alle Scheduler nah beieinander, weil sie für
+deutlich weniger Schritte entwickelt wurden. Anders als bei MNIST (Exp 2) hilft Stochastik
+nicht, weil das Modell stark genug für deterministisches Sampling ist.
+
+**Aufbau:** Nur der Scheduler variiert, w=5, sonst wie Exp 5. DDIM (η=0), Euler, DPM++ 2M
+deterministisch; Euler Ancestral und DPM++ 2M SDE stochastisch. Die 12 Euler-Bilder wurden aus
+Exp 5 übernommen (identische Einstellungen, deterministisch reproduzierbar). Gepaarter
+Vergleich gegen Euler über 12 Paare (3 Prompts × 4 Seeds, gleiches Startrauschen).
+
+| Scheduler | Art | CLIP L14 | CLIP B32 | gepaart vs. Euler L14 (besser/gleich/schlechter) | gepaart B32 | Sättigung |
+|-----------|-----|---------:|---------:|------:|------:|----------:|
+| DDIM          | det.   | 29,2 | 36,6 | −0,09 (4/3/5) | +0,05 (5/2/5) | 0,315 |
+| Euler         | det.   | 29,3 | 36,6 | Referenz | Referenz | 0,314 |
+| DPM++ 2M      | det.   | 28,7 | 36,9 | −0,61 (2/2/8) | +0,28 (6/3/3) | 0,324 |
+| Euler Ancestral | stoch. | 28,6 | 37,3 | −0,73 (4/1/7) | +0,69 (5/2/5) | 0,359 |
+| DPM++ 2M SDE  | stoch. | 29,9 | 38,0 | +0,63 (7/0/5) | +1,45 (7/2/3) | **0,406** |
+
+![Exp 6](img/sdxl_exp6_schedulers.png)
+![Exp 6 Raster](img/sdxl_exp6_grid.png)
+
+**Befund 1 — Die drei deterministischen Scheduler erzeugen praktisch dasselbe Bild.** Im
+Raster (Seed 0) sind DDIM, Euler und DPM++ 2M kaum zu unterscheiden. Sie sind verschiedene
+numerische Verfahren für dieselbe Differentialgleichung (die „probability flow ODE“); bei
+25 Schritten sind alle nah genug an deren Lösung. Ihre CLIP-Unterschiede (−0,6 bis +0,3)
+haben bei den zwei Richtern **entgegengesetzte Vorzeichen**, sind also Rauschen.
+
+**Befund 2 — Stochastische Scheduler erzeugen andere Bilder aus demselben Seed.** Frisches
+Rauschen in jedem Schritt führt auf eine andere Bahn: andere Hütte, andere Fuchshaltung,
+andere Formen. Robust über alle drei Prompts: **höhere Sättigung** (0,36 bzw. 0,41 statt 0,31).
+
+**Befund 3 — DPM++ 2M SDE ist als einziger bei beiden Richtern vorn, aber nicht belastbar.**
++0,6 bzw. +1,5 Punkte, getragen vom shapes-Prompt (26,0 vs. 24,2 L14; im Raster mit Pyramide).
+Gepaart nur 7 von 12 bzw. 7 von 10 entschiedenen Paaren besser, Vorzeichentest p≈0,77 bzw.
+p≈0,34. Mit 12 Paaren nicht von Zufall zu unterscheiden.
+
+**Befund 4 — Laufzeit pro Schritt ist bei allen gleich** (~30 s/Bild), weil jeder dieser
+Scheduler genau einen U-Net-Aufruf pro Schritt braucht. Der höhere Euler-Wert (37,5 s) stammt
+aus den aus Exp 5 übernommenen Bildern, die unter anderer Systemlast entstanden; kein
+Scheduler-Effekt.
+
+**Hypothese bestätigt.** Bei 25 Schritten ist die Scheduler-Wahl für die Prompt-Treue
+nachrangig. Sie entscheidet stattdessen, *welches* Bild ein Seed liefert (deterministisch vs.
+stochastisch) und wie gesättigt es ausfällt. **Vergleich mit Stufe 1:** Bei MNIST war
+Stochastik der zweitstärkste Hebel (DDIM η=0 → η=1: FID 36 → 21); bei SDXL hilft sie nicht
+messbar. Das stützt die Interpretation aus Exp 2: Stochastik korrigiert die Fehler eines
+schwachen ε-Schätzers, ein starker braucht sie nicht.
+
+**Offen:** Wenige Schritte (10–15), wo sich die Verfahren laut Literatur stärker
+unterscheiden; mehr Seeds für den DPM++-2M-SDE-Hinweis.

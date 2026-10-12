@@ -29,8 +29,9 @@ die erste Messung in die Irre führte.
 5. [Alle Hebel im Vergleich](#5-alle-hebel-im-vergleich)
 6. [Lehren](#6-lehren)
 7. [Reproduzieren](#7-reproduzieren)
-8. [Ausblick: Stufe 2](#8-ausblick-stufe-2)
-9. [Referenzen](#9-referenzen)
+8. [Stufe 2: SDXL lokal](#8-stufe-2-sdxl-lokal)
+9. [Ausblick](#9-ausblick)
+10. [Referenzen](#10-referenzen)
 
 ---
 
@@ -293,18 +294,95 @@ uv run python scripts/plot_guidance.py mnist_cond
 
 ---
 
-## 8. Ausblick: Stufe 2
+## 8. Stufe 2: SDXL lokal
 
-Der Plan sieht als zweite Stufe SDXL mit DreamBooth-LoRA vor: Inferenz lokal über MPS,
-Training des Adapters auf Kaggle, Bewertung per CLIP-Score. Die Bausteine dieses Projekts
-tauchen dort eins zu eins wieder auf: Zeit-Embedding, ε-Prediction, Scheduler-Wahl
-(η, Schrittzahl), Guidance-Regler und Konditionierung, nur mit Text statt Klassen-Labels
-und im Latent-Raum eines VAE statt auf Pixeln. Offene Fortsetzungen in Stufe 1: base 64 länger
-trainieren (Loss noch nicht flach), Sampling mit posterior variance β̃_t als Gegenprobe zu Exp 2.
+Dieselben Bausteine in groß: [Stable Diffusion XL](https://arxiv.org/abs/2307.01952) über
+`diffusers`, in fp16 auf dem MacBook Air (MPS). Ziel ist nicht, ein Modell zu trainieren,
+sondern die Befunde aus Stufe 1 an einem Modell mit 2,6 Mrd. U-Net-Parametern zu prüfen.
+
+### Was SDXL anders macht
+
+| Baustein | MNIST-DDPM (Stufe 1) | SDXL |
+|----------|----------------------|------|
+| Rechenraum | 1×32×32 Pixel | 4×128×128 Latent eines VAE |
+| Bedingung | Klassen-Embedding, 10 Ziffern | 2 CLIP-Text-Encoder, 77 Token à 2048 Zahlen |
+| U-Net-Kanäle | 32 / 64 / 128 | 320 / 640 / 1280 |
+| Attention | keine | Self- + Cross-Attention, 93 % der Parameter auf der 32×32-Stufe |
+| Trainingsziel | MSE auf ε | MSE auf ε |
+| Guidance | `ε̂_u + w·(ε̂_c − ε̂_u)` | dieselbe Formel |
+
+Der VAE ist der Schlüssel: Er komprimiert das Bild 48-fach, und die Diffusion läuft nur im
+komprimierten Raum ([Latent Diffusion](https://arxiv.org/abs/2112.10752)). Auf dem eigenen
+Fuchsbild gemessen: PSNR 38,8 dB, im Mittel 1,8 von 255 Helligkeitsstufen Abweichung, sichtbar
+nur in feinen Texturen (`scripts/sdxl_vae_demo.py`).
+
+<p align="center"><img src="docs/img/sdxl_vae_latent.png" width="900" alt="VAE: Bild, vier Latent-Kanäle, Rekonstruktion"></p>
+
+Laufzeit auf dem M5 Air bei 768×768 und 25 Schritten: ~30 s pro Bild, Spitzenspeicher
+11,6 GB mit Guidance. Guidance verdoppelt die Kosten pro Schritt, weil das U-Net zweimal läuft.
+
+### Messung
+
+Zwei CLIP-Modelle bewerten, wie gut Bild und Prompt zusammenpassen (CLIP-Score). Zwei,
+weil der erste SDXL-Text-Encoder selbst ein CLIP ViT-L/14 ist: Der Literatur-Standard als
+Richter ist mit dem Generator verwandt, der zweite (LAION ViT-B/32) nicht. Dazu Vielfalt
+(mittlere paarweise CLIP-Distanz zwischen Seeds) und HSV-Sättigung. Drei Prompts: ein Foto,
+eine Szene im Malstil und eine Komposition aus Formen und Farben, je vier Seeds.
+
+### Exp 5: Guidance-Stärke
+
+<p align="center"><img src="docs/img/sdxl_guidance_grid_fox.png" width="900" alt="Guidance-Raster"></p>
+<p align="center"><img src="docs/img/sdxl_exp5_clip.png" width="900" alt="CLIP-Score, Vielfalt, Sättigung über w"></p>
+
+**Das Optimum liegt bei w≈5–7,5, eine Größenordnung über MNIST (w=1).** Beide Richter steigen
+bis w=5 und bleiben dann flach. Die Vielfalt halbiert sich schon bis w=3, die Sättigung steigt
+immer weiter: Ab w≈5 kauft mehr Guidance keine Treue mehr, nur Farbe. Derselbe
+Treue-Vielfalt-Konflikt wie in Exp 4, mit anderem Kipppunkt, weil Text viel mehr Spielraum
+lässt als zehn Klassen. Der Formen-Prompt scheitert bei *jeder* Stärke: CLIP erfasst, welche
+Objekte vorkommen, aber kaum, wie sie angeordnet sind.
+
+### Exp 6: Scheduler
+
+<p align="center"><img src="docs/img/sdxl_exp6_grid.png" width="560" alt="Scheduler-Raster"></p>
+
+**Bei 25 Schritten ist der Scheduler für die Prompt-Treue nachrangig.** DDIM, Euler und
+DPM++ 2M liefern aus demselben Seed praktisch dasselbe Bild: Es sind verschiedene numerische
+Lösungsverfahren derselben Differentialgleichung. Ihre CLIP-Unterschiede haben bei den beiden
+Richtern entgegengesetzte Vorzeichen. Die stochastischen Varianten (Euler Ancestral,
+DPM++ 2M SDE) erzeugen andere Bilder und durchgehend höhere Sättigung. DPM++ 2M SDE liegt als
+einziger bei beiden Richtern vorn, gepaart aber nur 7 von 12, statistisch nicht belastbar.
+
+**Gegenprobe zu Stufe 1:** Bei MNIST war Stochastik im Sampler der zweitstärkste Hebel, bei
+SDXL hilft sie nicht messbar. Das stützt die Deutung aus Exp 2: Stochastik korrigiert die
+Fehler eines schwachen Rauschschätzers, ein starker braucht sie nicht.
+
+Reproduzieren (benötigt `uv sync --extra sdxl`, ~7 GB Modell-Download):
+
+```bash
+uv run python -m sdxl.download
+uv run python -m sdxl.generate --prompt "a red fox sitting in a snowy forest, golden hour, photo" --name fox
+uv run python -m sdxl.experiment --name exp5                       # 60 Bilder, fortsetzbar
+uv run python -m sdxl.experiment --name exp6 --scheduler ddim euler euler_a dpmpp_2m dpmpp_2m_sde --guidance 5 --reuse-from exp5
+uv run python -m sdxl.clip_eval --name exp5 && uv run python scripts/plot_clip_eval.py exp5
+uv run python -m sdxl.clip_eval --name exp6 && uv run python scripts/plot_scheduler_eval.py exp6
+```
+
+Details und alle Zahlen: [`docs/RESULTS.md`](docs/RESULTS.md#stufe-2-sdxl-lokal).
 
 ---
 
-## 9. Referenzen
+## 9. Ausblick
+
+Nächster Schritt ist DreamBooth-LoRA: SDXL ein neues Motiv aus wenigen eigenen Fotos
+beibringen, mit einem kleinen Adapter in den Attention-Schichten des U-Nets, trainiert auf
+Kaggle. Bewertet wird, wie ähnlich die Bilder dem Motiv sind und ob der Prompt weiter befolgt
+wird, über verschiedene LoRA-Ränge. Offene Fortsetzungen in Stufe 1: base 64 länger
+trainieren (Loss noch nicht flach), Sampling mit posterior variance β̃_t als Gegenprobe zu
+Exp 2. In Stufe 2: Scheduler bei 10–15 Schritten, wo sich die Verfahren stärker unterscheiden.
+
+---
+
+## 10. Referenzen
 
 - Ho, Jain, Abbeel (2020). *Denoising Diffusion Probabilistic Models.* [arXiv:2006.11239](https://arxiv.org/abs/2006.11239)
 - Nichol, Dhariwal (2021). *Improved Denoising Diffusion Probabilistic Models.* [arXiv:2102.09672](https://arxiv.org/abs/2102.09672)
@@ -312,3 +390,8 @@ trainieren (Loss noch nicht flach), Sampling mit posterior variance β̃_t als G
 - Ho, Salimans (2022). *Classifier-Free Diffusion Guidance.* [arXiv:2207.12598](https://arxiv.org/abs/2207.12598)
 - Karras, Aittala, Aila, Laine (2022). *Elucidating the Design Space of Diffusion-Based Generative Models.* [arXiv:2206.00364](https://arxiv.org/abs/2206.00364)
 - Heusel et al. (2017). *GANs Trained by a Two Time-Scale Update Rule* (FID). [arXiv:1706.08500](https://arxiv.org/abs/1706.08500)
+- Rombach et al. (2022). *High-Resolution Image Synthesis with Latent Diffusion Models.* [arXiv:2112.10752](https://arxiv.org/abs/2112.10752)
+- Podell et al. (2023). *SDXL: Improving Latent Diffusion Models for High-Resolution Image Synthesis.* [arXiv:2307.01952](https://arxiv.org/abs/2307.01952)
+- Radford et al. (2021). *Learning Transferable Visual Models From Natural Language Supervision* (CLIP). [arXiv:2103.00020](https://arxiv.org/abs/2103.00020)
+- Hessel et al. (2021). *CLIPScore: A Reference-free Evaluation Metric for Image Captioning.* [arXiv:2104.08718](https://arxiv.org/abs/2104.08718)
+- Lu et al. (2022). *DPM-Solver++: Fast Solver for Guided Sampling of Diffusion Probabilistic Models.* [arXiv:2211.01095](https://arxiv.org/abs/2211.01095)
