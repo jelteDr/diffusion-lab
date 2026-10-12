@@ -33,7 +33,7 @@ gemessen und dokumentiert, README erklärt den Ablauf mit eigenen Bildern.
 
 | # | Meilenstein | Inhalt | Lernziel | Status |
 |---|-------------|--------|----------|--------|
-| S1 | SDXL-Inferenz lokal | diffusers-Pipeline auf MPS (fp16), Base + Refiner, erste Bilder | Latent Diffusion, VAE, Text-Encoder, Scheduler-Auswahl | ⬜ |
+| S1 | SDXL-Inferenz lokal | diffusers-Pipeline auf MPS (fp16), Base + Refiner, erste Bilder | Latent Diffusion, VAE, Text-Encoder, Scheduler-Auswahl | 🚧 `sdxl/` steht: fp16 + fp16-Fix-VAE auf MPS, 5,8 s/Schritt bei 1024², 8,8 GB Spitze; als Nächstes Guidance-/Scheduler-Sweep |
 | S2 | Datensatz | 5 bis 10 eigene Fotos, Captions mit Trigger-Wort, Regularisierungsbilder | DreamBooth-Idee: neues Konzept in ein Modell bringen | ⬜ |
 | S3 | LoRA-Training | diffusers-Skript `train_dreambooth_lora_sdxl.py` auf Kaggle; Parameter Rank, Lernrate, Prior Preservation bewusst wählen | LoRA: kleine Adapter statt Vollmodell | ⬜ |
 | S4 | Adapter lokal | LoRA-Gewichte laden, Prompts vergleichen, Base vs. Base+LoRA | Adapter-Mechanik in der Pipeline | ⬜ |
