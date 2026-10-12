@@ -81,6 +81,28 @@ def diversity(img_emb: torch.Tensor) -> float:
     return float((1.0 - sim[mask]).mean())
 
 
+def paired_comparison(scores: list[float], reference: list[float], tie_eps: float = 0.25) -> dict:
+    """Gepaarter Vergleich zweier Varianten über dieselben (Prompt, Seed)-Paare.
+
+    Beide Listen haben dieselbe Länge und dieselbe Reihenfolge: Eintrag i gehört zu
+    demselben Prompt und demselben Seed, also demselben Startrauschen. Deshalb zählt
+    die Differenz pro Paar, nicht der Vergleich zweier Mittelwerte (vgl. Exp 1).
+
+    Args:
+        scores:    CLIP-Scores der getesteten Variante
+        reference: CLIP-Scores der Referenz (hier: Euler)
+        tie_eps:   Differenzen mit Betrag <= tie_eps zählen als Unentschieden
+
+    Returns:
+        {"mean_diff": Mittel von scores - reference, "wins": ..., "ties": ..., "losses": ...}
+    """
+    diffs = [s - r for s, r in zip(scores, reference)]
+    wins = sum(d > tie_eps for d in diffs)
+    losses = sum(d < -tie_eps for d in diffs)
+    ties = len(diffs) - wins - losses
+    return {"mean_diff": round(sum(diffs) / len(diffs), 2), "wins": wins, "ties": ties, "losses": losses}
+
+
 def saturation(image: Image.Image) -> float:
     hsv = np.asarray(image.convert("HSV"), dtype=np.float32) / 255.0
     return float(hsv[..., 1].mean())

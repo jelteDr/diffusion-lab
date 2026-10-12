@@ -14,10 +14,12 @@ also schon auswertbar, nur mit weniger Seeds.
 
 import argparse
 import json
+import shutil
 import time
 from pathlib import Path
 
 import torch
+from tqdm import tqdm
 
 from sdxl.pipeline import MemoryTracker, device_and_dtype, load_pipeline
 from sdxl.schedulers import SCHEDULERS, make_scheduler
@@ -37,6 +39,38 @@ def image_path(run_dir: Path, prompt_key: str, sched: str, w: float, seed: int) 
     return run_dir / prompt_key / f"{sched}_w{w:g}_s{seed}.png"
 
 
+def reuse_images(src: Path, run_dir: Path, todo: list, args) -> list:
+    """Übernimmt Bilder aus einem früheren Lauf, wenn Prompt-Text, Scheduler, w, Seed,
+    Schritte und Größe identisch sind. Bei festem Seed rechnet SDXL deterministisch
+    (CPU-Generator), ein Neuberechnen ergäbe dasselbe Bild. Gibt die verbleibenden Jobs zurück."""
+    src_cfg = json.loads((src / "config.json").read_text())
+    if src_cfg["steps"] != args.steps or src_cfg["size"] != args.size:
+        print(f"Übernahme aus {src} nicht möglich: andere Schritte/Größe")
+        return todo
+    src_meta = {}
+    for line in (src / "meta.jsonl").read_text().splitlines():
+        if line.strip():
+            r = json.loads(line)
+            src_meta[r["file"]] = r
+    remaining, reused = [], 0
+    with open(run_dir / "meta.jsonl", "a") as meta:
+        for seed, pk, sched, w in todo:
+            src_path = image_path(src, pk, sched, w, seed)
+            same_prompt = src_cfg["prompts"].get(pk) == PROMPTS[pk]
+            rel = str(src_path.relative_to(src))
+            if same_prompt and src_path.exists() and rel in src_meta:
+                reused += 1
+                if not args.dry_run:
+                    dst = image_path(run_dir, pk, sched, w, seed)
+                    dst.parent.mkdir(exist_ok=True)
+                    shutil.copy2(src_path, dst)
+                    meta.write(json.dumps(src_meta[rel] | {"reused_from": src.name}) + "\n")
+            else:
+                remaining.append((seed, pk, sched, w))
+    print(f"{'würde übernehmen' if args.dry_run else 'übernommen'}: {reused} Bilder aus {src.name}")
+    return remaining
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Exp 5: Guidance-Sweep über Prompts und Seeds")
     parser.add_argument("--name", default="exp5")
@@ -46,6 +80,9 @@ def main() -> None:
     parser.add_argument("--scheduler", nargs="+", choices=list(SCHEDULERS), default=["euler"])
     parser.add_argument("--steps", type=int, default=25)
     parser.add_argument("--size", type=int, default=768)
+    parser.add_argument("--reuse-from", default=None,
+                        help="fertige Bilder mit identischen Einstellungen aus diesem Lauf übernehmen statt neu rechnen")
+    parser.add_argument("--dry-run", action="store_true", help="nur planen und anzeigen, nichts erzeugen")
     args = parser.parse_args()
 
     run_dir = Path("runs/sdxl") / args.name
@@ -60,19 +97,30 @@ def main() -> None:
     jobs = [(seed, pk, sched, w) for seed in args.seeds for pk in args.prompts
             for sched in args.scheduler for w in args.guidance]
     todo = [j for j in jobs if not image_path(run_dir, j[1], j[2], j[3], j[0]).exists()]
+
+    if args.reuse_from:
+        todo = reuse_images(Path("runs/sdxl") / args.reuse_from, run_dir, todo, args)
+
     print(f"{len(jobs)} Bilder geplant, {len(jobs) - len(todo)} schon fertig, {len(todo)} offen")
-    if not todo:
+    if not todo or args.dry_run:
         return
 
     device, dtype = device_and_dtype()
     pipe = load_pipeline(device, dtype)
+    # Schrittbalken von diffusers in die zweite Zeile, unter den Gesamtbalken
+    pipe.set_progress_bar_config(position=1, leave=False, desc="  Schritte", ncols=90)
     base_config = pipe.scheduler.config
     tracker = MemoryTracker(device)
     current_sched = None
     t_start = time.perf_counter()
 
+    # Gesamtbalken über ALLE Bilder des Experiments; bei Fortsetzung startet er beim erreichten Stand
+    overall = tqdm(total=len(jobs), initial=len(jobs) - len(todo), desc="Gesamt", unit="Bild",
+                   position=0, ncols=90, bar_format="{desc}: {percentage:3.0f}%|{bar}| {n}/{total} [{elapsed}<{remaining}]")
+
     with open(run_dir / "meta.jsonl", "a") as meta:
         for i, (seed, pk, sched, w) in enumerate(todo, start=1):
+            overall.set_description(f"Gesamt ({pk}, w={w:g}, Seed {seed})")
             if sched != current_sched:
                 pipe.scheduler = make_scheduler(sched, base_config)
                 current_sched = sched
@@ -94,8 +142,12 @@ def main() -> None:
 
             elapsed = time.perf_counter() - t_start
             eta_min = elapsed / i * (len(todo) - i) / 60
-            print(f"[{i}/{len(todo)}] {pk:6s} {sched} w={w:<4g} seed {seed}: {seconds:5.0f} s   "
-                  f"Rest ca. {eta_min:.0f} min", flush=True)
+            # tqdm.write statt print: schreibt oberhalb der Balken, ohne sie zu zerreißen
+            tqdm.write(f"[{i}/{len(todo)}] {pk:6s} {sched} w={w:<4g} seed {seed}: {seconds:5.0f} s   "
+                       f"Rest ca. {eta_min:.0f} min")
+            overall.update(1)
+    overall.close()
+    print(f"fertig: {len(jobs)} Bilder unter {run_dir}")
 
 
 if __name__ == "__main__":
